@@ -50,7 +50,7 @@ def find_chunk_boundaries(
 
 
 ## Usage
-with open(..., "rb") as f:
+with open(os.path.join(os.path.dirname( os.path.abspath(__file__) ), "../", "tests/fixtures", "corpus.en"), "rb") as f:
     num_processes = 4
     boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -59,4 +59,5 @@ with open(..., "rb") as f:
     for start, end in zip(boundaries[:-1], boundaries[1:]):
         f.seek(start)
         chunk = f.read(end - start).decode("utf-8", errors="ignore")
+        print(type(chunk))
         # Run pre-tokenization on your chunk and store the counts for each pre-token
