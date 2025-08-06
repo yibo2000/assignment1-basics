@@ -3,7 +3,7 @@
 *.pyc
 **/.DS_Store
 cs336_basics/tmp.py
-./data
+data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
