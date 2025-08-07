@@ -300,7 +300,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -559,7 +559,11 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    from cs336_basics.bpe_tokenizer import BPETokenizer, BPETokenizer_example
+    # use the implementation in slides, warning: failed
+    # return BPETokenizer_example(vocab, merges, special_tokens)
+    return BPETokenizer(vocab, merges, special_tokens)
+    #raise NotImplementedError
 
 
 def run_train_bpe(
@@ -591,5 +595,7 @@ def run_train_bpe(
     """
     #raise NotImplementedError
     from cs336_basics.bpe_tokenizer_training import train_bpe, train_bpe_example
+    # use the implementation in slides, warning: timeout and failed
+    # bpe_params = train_bpe_example(input_path, vocab_size, special_tokens)
     bpe_params = train_bpe(input_path, vocab_size, special_tokens)
     return bpe_params.vocab, bpe_params.merges
