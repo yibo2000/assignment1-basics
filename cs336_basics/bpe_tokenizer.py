@@ -5,7 +5,9 @@ import json
 import regex as re # not import re
 import os
 from typing import Iterable, Iterator
-from collections import OrderedDict
+from collections import defaultdict
+from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 class Tokenizer():
     """Abstract interface for a tokenizer."""
@@ -38,7 +40,7 @@ class BPETokenizer(Tokenizer):
     params: BPETokenizerParams
     special_tokens: list[str] | None
     vocab_b_to_idx: dict[bytes, int] # bytes -> index, for encoding
-    merge_hash: dict[bytes, bytes] # bytes -> bytes
+    # merge_hash: dict[bytes, list[bytes]] # bytes -> bytes
 
     """BPE tokenizer given a set of merges and a vocabulary."""
     def __init__(self, vocab, merges, special_tokens=None):
@@ -48,6 +50,7 @@ class BPETokenizer(Tokenizer):
         self.vocab_b_to_idx = {}
         for idx, bt in self.params.vocab.items():
             self.vocab_b_to_idx[bt] = idx
+        # self.merge_hash = defaultdict(list)
     
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
@@ -70,23 +73,19 @@ class BPETokenizer(Tokenizer):
         compiled_pat = re.compile(PAT)
         pre_tokens = []
         for te in split_text:
-            if(self.special_tokens != None and te in self.special_tokens): pre_tokens += [te]
-            else: pre_tokens += [ match.group(0) for match in compiled_pat.finditer(te) ]
+            if(self.special_tokens != None and te in self.special_tokens): pre_tokens.extend([te])
+            else: pre_tokens.extend([ match.group(0) for match in compiled_pat.finditer(te)])
 
         # encoding
         # process each pre-token 
         pretoken_to_res = {} # pre-tokens -> list[int]
-        for token in set(pre_tokens):
+        for token in pre_tokens:
+            if token in pretoken_to_res: continue
             if(self.special_tokens != None and token in self.special_tokens): pretoken_to_res[token] = [self.vocab_b_to_idx[ token.encode("utf-8") ]]
             else:
                 indices = []
                 for c in token:
-                    """
-                    # rearrangement, e.g.:
-                    # "🙃" -> [172, 253, 247, 225] -> [8582, 247, 225] # by gpt-2
-                    # "🙃" bytes -> [240, 159, 153, 131]
-                    # delta = [-68, 94, 94, 94]
-                    
+                    """                    
                     see `data_gym_to_mergeable_bpe_ranks` in https://github.com/openai/tiktoken/blob/main/tiktoken/load.py
                     the oracle BPETokenizer in tests/test_tokenizer.py (tiktoken.get_encoding("gpt2")) rearranges the token from 0 to 255:
                     from
@@ -106,6 +105,10 @@ class BPETokenizer(Tokenizer):
                     assert len(rank_to_intbyte) == 2**8
                     ```
                     """
+                    # rearrangement, e.g.:
+                    # "🙃" -> [172, 253, 247, 225] -> [8582, 247, 225] # by gpt-2
+                    # "🙃" bytes -> [240, 159, 153, 131]
+                    # delta = [-68, 94, 94, 94]
                     lst = list(map(int, c.encode("utf-8")))
                     if(len(lst) == 1): 
                         indices.append(self.vocab_b_to_idx[c.encode("utf-8")])
@@ -117,24 +120,42 @@ class BPETokenizer(Tokenizer):
                         else: indices.append(i + 94)
                 
                 for t0, t1 in self.params.merges:
+                    if( self.vocab_b_to_idx[t0] not in indices or self.vocab_b_to_idx[t1] not in indices): continue # pruning
                     pair = (self.vocab_b_to_idx[t0], self.vocab_b_to_idx[t1])
                     indices = merge(indices, pair, self.vocab_b_to_idx[t0+t1])
+                
                 pretoken_to_res[token] = indices
         
         res = []
         for token in pre_tokens:
-            res += pretoken_to_res[token]
+            res.extend(pretoken_to_res[token])
         return res
-
+    
+    def wrapper(self, text:str, id:int):
+        return self.encode(text), id
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         """
         Given an iterable of strings (e.g., a Python file handle), return a generator that lazily yields token IDs. This is
         required for memory-eﬀicient tokenization of large files that we cannot directly load into memory.
         """
-        res = []
-        for text in iterable:
-            res.extend(self.encode(text))
-        return res
+
+        with ProcessPoolExecutor(max_workers= os.cpu_count() ) as executor:
+            futures, i = [], 0
+            for text in iterable:
+                future = executor.submit(self.wrapper, text, i)
+                futures.append(future)
+                i += 1
+            
+            res_texts = defaultdict(list)
+            for future in tqdm(as_completed(futures), total=len(futures), leave=False):
+            #for future in as_completed(futures):
+                a_res, id = future.result()
+                res_texts[id] = a_res
+        
+            res = []
+            for ii in range(i):
+                res.extend(res_texts[ii])
+            return res
     
     def decode(self, ids: list[int]) -> str:
         """
@@ -230,7 +251,7 @@ class BPETokenizer_example(Tokenizer):
         return string
 
 
-# slow version in lecture_01.py
+# version in lecture_01.py
 def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int]:  # @inspect indices, @inspect pair, @inspect new_index
     """Return `indices`, but with all instances of `pair` replaced with `new_index`."""
     new_indices = []  # @inspect new_indices

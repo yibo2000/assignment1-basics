@@ -4,9 +4,6 @@ from typing import BinaryIO
 from collections import defaultdict
 from cs336_basics.bpe_tokenizer import BPETokenizerParams, merge, load_bpe_from_dir, save_bpe
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import Manager
-from tqdm import tqdm
-
 
 def find_chunk_boundaries(
     file: BinaryIO,
