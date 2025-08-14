@@ -2,12 +2,13 @@ import torch
 import torch.nn as nn
 import math
 from jaxtyping import Float
-from einops import rearrange, einsum
+from einops import einsum
 
 
 class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int, 
-                device: torch.device | None = None, dtype: torch.dtype | None = None):
+                weight: Float[torch.Tensor, " d_out d_in"] | None = None,
+                device: torch.device | None = None, dtype: torch.dtype | None = None,):
         """
         Construct a linear transformation module. This function should accept the following parameters:
         in_features: int final dimension of the input
@@ -19,7 +20,7 @@ class Linear(nn.Module):
         # initialize the weights, y = Wx, W [d_out, d_in], x[d_in]
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = nn.Parameter(nn.init.trunc_normal_(
+        self.weight = weight if weight != None else nn.Parameter(nn.init.trunc_normal_(
             tensor = torch.rand( out_features, in_features, device=device, dtype=dtype),
             mean = 0.0, std = math.sqrt(2/(in_features+out_features)), a = -3.0, b = 3.0
         ))
@@ -30,7 +31,7 @@ class Linear(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         "Apply the linear transformation to the input."
         "y = Wx"
-        return einsum(self.weight, x, "out in, ... in -> ... out" )
+        return einsum(self.weight, x, "d_out d_in, ... d_in -> ... d_out" )
 
 
 class Embedding(nn.Module):

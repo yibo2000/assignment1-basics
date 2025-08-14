@@ -30,8 +30,8 @@ def run_linear(
     """
     from cs336_basics.basic import Linear
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    linear = Linear(d_in, d_out, device, torch.float32)
-    linear.set_weight(weights)
+    linear = Linear(d_in, d_out, weights, device, torch.float32)
+    # linear.set_weight(weights)
     return linear.forward(in_features)
 
 
@@ -89,7 +89,9 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    from cs336_basics.transformer import FFN
+    ffn = FFN(d_model, d_ff, w1_weight, w2_weight, w3_weight)
+    return ffn.SwiGLU(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -384,7 +386,11 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import RMSNorm
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    rmsnorm = RMSNorm(d_model, eps, device=device, dtype=torch.float32)
+    rmsnorm.set_gain(weights)
+    return rmsnorm.forward(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
