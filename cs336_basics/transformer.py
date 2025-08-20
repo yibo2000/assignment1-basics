@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float, Int
 from einops import reduce, einsum, rearrange
-from cs336_basics.basic import Linear
+from cs336_basics.basic import Linear, Embedding
 
 # Root Mean Square Layer Normalization
 class RMSNorm(nn.Module):
@@ -27,6 +27,11 @@ class RMSNorm(nn.Module):
         return result.to(in_dtype) # downcast to the original dtype
     
 
+# x.shape -> d_model
+def SiLU(x: torch.Tensor): # SiLU(x) = x·sigmod(x)
+    return x * torch.sigmoid(x)
+
+
 # Feedforward Neural Network
 class FFN(nn.Module):
     def __init__(self, d_model: int, d_ff: int,
@@ -40,17 +45,13 @@ class FFN(nn.Module):
         self.l_w1 = Linear(self.d_model, self.d_ff, w1_weight)
         self.l_w2 = Linear(self.d_ff, self.d_model, w2_weight)
         self.l_w3 = Linear(self.d_model, self.d_ff, w3_weight)
-
-    # x.shape -> d_model
-    def SiLU(self, x: torch.Tensor): # SiLU(x) = x·sigmod(x)
-        return x * torch.sigmoid(x)
     
     # x.shape -> d_model
     def GLU(self, x: torch.Tensor): # GLU(x, W1, W2) = sigmod(W1 x) ⊙ W2 x
         raise NotImplementedError
     
     def SwiGLU(self, x: torch.Tensor): # FFN(x) = SwiGLU(x, W1, W2, W3) = W2(SiLU(W1x) ⊙ W3 x)
-        return self.l_w2.forward( (self.SiLU( self.l_w1.forward(x)  ) * (self.l_w3.forward(x))) )
+        return self.l_w2.forward( (SiLU( self.l_w1.forward(x)  ) * (self.l_w3.forward(x))) )
     
 
 # RoPE: Rotary Position Embedding
@@ -157,3 +158,98 @@ def multihead_self_attention(
     o = scaled_dot_product_attention(qs, ks, vs, ~casual_mask)
     o = rearrange(o, "... h seq_len d_head ->  ... seq_len (h d_head)", h=num_heads )
     return einsum(o, o_proj_weight, "... seq_len d_v, d_model d_v -> ... seq_len d_model" )
+
+
+class TransformerBlock(nn.Module):
+    """
+    Two sub-layer: MLA + FFN
+    """
+    def __init__(self,  
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        max_seq_len: int,
+        theta: float,
+        weights: dict[str, torch.Tensor],
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.max_seq_len = max_seq_len
+        self.theta = theta
+        self.weights = weights
+        self.rms1 = RMSNorm(self.d_model)
+        self.rms1.set_gain(self.weights["ln1.weight"])
+        self.rms2 = RMSNorm(self.d_model)
+        self.rms2.set_gain(self.weights["ln2.weight"])
+        self.ffn = FFN(self.d_model, self.d_ff, self.weights["ffn.w1.weight"], self.weights["ffn.w2.weight"], self.weights["ffn.w3.weight"])
+
+    def forward(self, in_features: Float[torch.Tensor, " batch sequence_length d_model"]) \
+        -> Float[torch.Tensor, " batch sequence_length d_model"]:
+        
+        data = in_features + multihead_self_attention(self.d_model, self.num_heads,
+            self.weights['attn.q_proj.weight'], self.weights['attn.k_proj.weight'], self.weights['attn.v_proj.weight'],
+            self.weights['attn.output_proj.weight'], 
+            self.rms1.forward(in_features), 
+            self.max_seq_len, self.theta, torch.arange(0, in_features.size(-2)) )
+        
+        data = data + self.ffn.SwiGLU(self.rms2.forward(data))
+        return data
+    
+
+class TransformerLM(nn.Module):
+    """The Full Transformer LM"""
+    def __init__(self,     
+        vocab_size: int,
+        context_length: int,
+        d_model: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: int,
+        rope_theta: float,
+        weights: dict[str, torch.Tensor],
+    ):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.context_length = context_length
+        self.num_layers = num_layers
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.rope_theta = rope_theta
+        self.weights = [ {
+            "attn.q_proj.weight": weights[f"layers.{i}.attn.q_proj.weight"],
+            "attn.k_proj.weight": weights[f"layers.{i}.attn.k_proj.weight"],
+            "attn.v_proj.weight": weights[f"layers.{i}.attn.v_proj.weight"],
+            "attn.output_proj.weight": weights[f"layers.{i}.attn.output_proj.weight"],
+            "ln1.weight": weights[f"layers.{i}.ln1.weight"],
+            "ffn.w1.weight": weights[f"layers.{i}.ffn.w1.weight"],
+            "ffn.w2.weight": weights[f"layers.{i}.ffn.w2.weight"],
+            "ffn.w3.weight": weights[f"layers.{i}.ffn.w3.weight"],
+            "ln2.weight": weights[f"layers.{i}.ln2.weight"],
+            } for i in range(num_layers)
+        ]
+        # word embedding
+        self.word_embedding = Embedding(self.vocab_size, self.d_model)
+        self.word_embedding.set_weight(weights["token_embeddings.weight"])
+        # num_layers Transformer Blocks
+        self.tfblocks = nn.ModuleList(
+            [ TransformerBlock(d_model, num_heads, d_ff, context_length, rope_theta, w) for w in self.weights ]
+        )
+        # Norm
+        self.ln_final = RMSNorm(self.d_model)
+        self.ln_final.set_gain(weights["ln_final.weight"])
+        # Linear (Output Embedding)
+        self.lm_head = Linear(in_features=self.d_model, out_features=self.vocab_size, weight=weights["lm_head.weight"])
+    
+
+    def forward(self, in_indices: Int[torch.Tensor, " batch_size sequence_length"],):
+        vector = self.word_embedding.forward(in_indices) # word embedding
+        for transformer in self.tfblocks:
+            vector = transformer.forward(vector)
+        vector = self.ln_final.forward(vector)
+        vector = self.lm_head.forward(vector)
+        #return my_softmax(vector, dim=-1)
+        return vector
+    
