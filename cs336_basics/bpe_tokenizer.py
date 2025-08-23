@@ -265,6 +265,7 @@ def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int
             i += 1
     return new_indices
 
+
 def test_encode():
     from tests.test_tokenizer import test_tinystories_sample_roundtrip
     import time
@@ -272,6 +273,7 @@ def test_encode():
     test_tinystories_sample_roundtrip()
     end = time.time()
     print(f"encoding time (seconds): {end - start}")
+
 
 if __name__ == "__main__":
     test_encode()
